@@ -1,12 +1,14 @@
 import os
-from pdfminer.layout import LTTextBoxHorizontal, LAParams
+import re
+from enum import Enum
+
 from pdfminer import layout as pdfminer_layout
 from pdfminer.converter import PDFPageAggregator
-from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
-from pdfminer.pdfparser import PDFParser
+from pdfminer.layout import LAParams
 from pdfminer.pdfdocument import PDFDocument
-
+from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
 from pdfminer.pdfpage import PDFPage
+from pdfminer.pdfparser import PDFParser
 
 
 class Word:
@@ -33,12 +35,19 @@ class Point:
         self.y = y
 
 
-class Extractor(object):
-    INVOICE_ELEMENTS = {
-        'CODE': '发票代码',
-        'NUMBER': '发票号码',
-        'DATE': '开票日期',
-        'CHECK_CODE': '校 验 码',
+class InvoiceExtractor(object):
+
+    class INVOICE_FOUR_ELEMENTS(str, Enum):
+        CODE = 'code'
+        NUMBER = 'number'
+        DATE = 'date'
+        CHECK_CODE = 'check_code'
+
+    INVOICE_FOUR_ELEMENT_ATTRIBUTES = {
+        INVOICE_FOUR_ELEMENTS.CODE: ('发票代码', re.compile(u'(?<!\d)\d{12}(?!\d)')),
+        INVOICE_FOUR_ELEMENTS.NUMBER: ('发票号码', re.compile(u'(?<!\d)\d{8}(?!\d)')),
+        INVOICE_FOUR_ELEMENTS.DATE: ('开票日期', re.compile(u'\d{4}年\d{2}月\d{2}日')),
+        INVOICE_FOUR_ELEMENTS.CHECK_CODE: ('校 验 码', re.compile(u'\d{5} \d{5} \d{5} \d{5}')),
     }
 
     def __init__(self, path):
@@ -106,7 +115,7 @@ class Extractor(object):
             elif isinstance(x, pdfminer_layout.LTCurve):
                 self.curves.append(x)
 
-    def _calute_point(self):
+    def _calculate_point(self):
         for line in self.lines:
             if line.x0 == line.x1:
                 self.vertical_lines.append(line)
@@ -142,11 +151,11 @@ class Extractor(object):
                         )
                     )
 
-    def draw_image(self):
+    def draw_image(self, image_save_path=".temp/invoice.png"):
         import cv2
         import matplotlib.pyplot as plt
         import numpy as np
-        from PIL import ImageFont, ImageDraw, Image
+        from PIL import Image, ImageDraw, ImageFont
 
         green = (0, 255, 0)
         red = (0, 0, 255)
@@ -203,21 +212,29 @@ class Extractor(object):
             cv2.circle(
                 mat1,
                 (int(point.x), int(point.y)),
-                5, colorful, 3
+                5, colorful, 1
             )
 
         plt.figure()
         plt.title("lines")
-        plt.imsave(".temp/lines.png", mat1)
+        plt.imsave(image_save_path, mat1)
 
-    def find_invoice_element(self):
+    def find_invoice_four_element(self, strict=False):
+        '''
+        strict:会使用正则校验结果
+        '''
+        if not self.layout:
+            self._load_data()
+        if not self.points:
+            self._calculate_point()
+
         y_min = min(self.points, key=lambda x: x.y).y
         useful_words = list(filter(lambda x: x.y1 < y_min, self.words))
         result = {}
 
-        for element_k, element_v in self.INVOICE_ELEMENTS.items():
+        for element_k, (element_text, element_re) in self.INVOICE_FOUR_ELEMENT_ATTRIBUTES.items():
             element_words = filter(
-                lambda x: x.text.find(element_v) != -1, useful_words)
+                lambda x: x.text.find(element_text) != -1, useful_words)
 
             for element_word in element_words:
                 def is_target(useful_word):
@@ -235,15 +252,16 @@ class Extractor(object):
                     useful_words
                 )
                 for target_word in target_words:
-                    result[element_k] = target_word.text
+                    if strict and not element_re.match(target_word.text):
+                        continue
+                    result[element_k.value] = target_word.text
 
         return result
 
 
 if __name__ == "__main__":
-    path = r'.temp/pdf/normal.pdf'
-    extractor = Extractor(path=path)
-    extractor._load_data()
-    extractor._calute_point()
-    print(extractor.find_invoice_element())
+    path = r'.temp/pdf/bad.pdf'
+    extractor = InvoiceExtractor(path=path)
+
+    print(extractor.find_invoice_four_element(strict=True))
     extractor.draw_image()
