@@ -21,3 +21,4 @@ Pipfile
 Pipfile.lock
 venv
 .vscode
+.temp
